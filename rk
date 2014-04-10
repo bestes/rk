@@ -1,0 +1,536 @@
+#!/bin/bash
+
+# rk - command line REST client.
+# Copyright (c) 2011 Brian Estes - All Rights Reserved
+#
+# Basically a wrapper for curl with REST-friendly features
+#
+# Q: Why did you write it in bash and not [whatever]?
+# A: Speed. Compatibility. Portability.
+#
+# Q: Why is it called "rk"?
+# A: Because it is quick to type. Retro reason/justification: REST Klient
+#
+# Subroutines first, main program below. Bash requires it this way.
+
+
+# Perform the actual REST call
+# There will be two or three more items in ARG_ARRAY at this point: METHOD URL DATA
+rest() {
+    r_echo "Option processing finished. Building curl command"
+
+    # Take no chances; clear all vars first
+    CMD_ARRAY=""
+    CURL_CMD=""
+    VERBOSE=""
+    ENDPOINT=""
+    RPATH2=""
+    RSUFFIX=""
+    SHOW_HEADER=""
+    METHOD=""
+    HEADER_STRING=""
+    DATA_OPT=""
+    DATA=""
+
+    if [ $RDEBUG ]; then
+        VERBOSE="-v"
+    fi
+
+    if [ ! $R_SUPRESS_HEADERS ]; then
+        SHOW_HEADER="-i"
+    fi
+
+    if [ $BINARY ]; then
+      echo "Binary mode ON" >/dev/stderr
+      SHOW_HEADER=""      # if GET, but not if POST or PUT or DELETE
+      EXTRA_LF=""         # if GET, but not if POST or PUT or DELETE
+      DATA_OPT="--data-binary"
+      # Set Content-Type header to application/octet-stream
+      #   I need a way to specify the actual content type as well
+      #   Either an X-Header or a ?content_type= ...
+      SET_PARAM="Content-Type"
+      SET_VALUE="application/octet-stream"
+      build_header_string
+    else
+      DATA_OPT="-d"
+    fi
+
+    METHOD=$THIS_ARG
+    RPATH2=${ARG_ARRAY[$i+1]}
+
+    # shift method, user path and all previous params off the array
+    for (( s = 0 ; s < $i+2 ; s++ ))
+      do
+        unset ARG_ARRAY[$s]
+    done
+
+    SET_PARAM=
+    SET_VALUE=
+    build_header_string
+    build_endpoint
+
+    CMD_ARRAY=("curl" $VERBOSE "--url" $ENDPOINT/$RPATH2$RSUFFIX
+               $SHOW_HEADER "-X" $METHOD $HEADER_STRING)
+
+
+    echo ${CMD_ARRAY[*]} >/dev/stderr   # just temporary
+
+    # Trying to find a way to clean up the if-if-if mess below
+    if [ $DRY_RUN ] || [ $RDEBUG ]; then
+      R_PRINT=1
+    fi
+    if [ ! $DRY_RUN ]; then
+      R_EXE=1
+    fi
+
+    # What a mess. The logic is so simple, but so messy!
+    if [ ${#ARG_ARRAY[@]} -gt 0 ]; then
+        # What if it is a redirect/stream? @ or @- will be the "data"
+
+        DATA="${ARG_ARRAY[*]}"  # ARG_ARRAY is now all data. It could be very long
+        if [ $DRY_RUN ] || [ $RDEBUG ]; then
+            r_echo "#1"
+            echo CMD: ${CMD_ARRAY[*]} $DATA_OPT "'$DATA'"
+        fi
+        if [ ! $DRY_RUN ]; then
+                      r_echo "#2"
+                      ${CMD_ARRAY[*]} $DATA_OPT "$DATA"
+                      RETURN_CODE=$?
+        fi
+    else
+        if [ $DRY_RUN ] || [ $RDEBUG ]; then
+            r_echo "#3"
+            echo CMD: ${CMD_ARRAY[*]}
+        fi
+        if [ ! $DRY_RUN ]; then
+                      r_echo "#4"
+                      ${CMD_ARRAY[*]}
+                      RETURN_CODE=$?
+        fi
+    fi
+    if [ $SHOW_HEADER ] || [ $METHOD != "GET" ] ; then
+        echo
+    fi
+
+    # This creates a 1 second-ish delay after every rk command
+    # In interactive use, no big deal. But in a script, it's a killer.
+#     while IFS= read -r -t 1 str; do
+#       echo "Error: Incoming data detected; to read from STDIN, append \"@-\" at"
+#       echo "       the end of the command, where your data normally goes."
+#       break
+#     done
+
+    # dang, gonna have to do more work for this. Curl needs to return the
+    # response code, then I can analyze it, then I can use it for exit.
+#     echo "return code: $RETURN_CODE"
+
+
+
+
+    # A few curl options just for reference
+    #
+    # consider
+    #  --user-agent = "curl+rk/v.2" or something like that
+    #
+    # -A, --user-agent STRING   User-Agent to send to server (sugar for "User-Agent" header)
+    # -e/--referer <URL>        sugar for "Referred By"
+    # -w/--write-out <format>   Defines what to display on stdout after a
+    #                           completed and successful operation.
+    # -i/--include              Include  the  HTTP-header in the output.
+    # -d/--data                 The  same  as  --data-ascii.
+    # --data-binary             To post data purely binary
+    # --data-urlencode          To URL-encode the value of a form field you may use
+    # -T, --upload-file <file>
+    # -#                        If you prefer a progress "bar" instead of the
+    #                           regular meter
+    #  --compressed
+    #         (HTTP)  Request a compressed response using one of the algorithms libcurl supports, and save the uncompressed docu-
+    #         ment.  If this option is used and the server sends an unsupported encoding, curl will report an error.
+    #
+    # Is this a joke (bad security) or worth supporting?
+    #  --digest
+    #         (HTTP) Enables HTTP Digest authentication. This is a authentication that prevents the password from being sent over
+    #         the  wire  in  clear text. Use this in combination with the normal -u, --user option to set user name and password.
+    #         See also --ntlm, --negotiate and --anyauth for related options.
+    #
+    # I guess to disable, just don't send -i
+    #  -i, --include
+    #         (HTTP) Include the HTTP-header in the output. The HTTP-header includes things like server-name, date of  the  docu-
+    #         ment, HTTP-version and more...
+    #
+    #  --no-keepalive
+    #         Disables the use of keepalive messages on the TCP connection, as by default curl enables them.
+    #         Note that this is the negated option name documented. You can thus use --keepalive to enforce keepalive.
+    #
+    #  --tcp-nodelay
+    #         Turn on the TCP_NODELAY option. See the curl_easy_setopt(3) man page for  details  about  this  option.  (Added  in
+    #         7.11.2)
+
+
+
+
+}
+# Set individual values, like HOST or PORT
+set_value() {
+    case "$SET_PARAM" in
+        scheme|schema)  # schema is not accurate, but I seem to misspell scheme often
+              if [ $SET_VALUE == "http" -o $SET_VALUE == "https" ]; then
+                  OLD_SCHEME=$RSCHEME
+                  RSCHEME=$SET_VALUE
+              else
+                  echo "Error: Scheme must be either \"http\" or \"https\""
+                  exit 1
+              fi
+              ;;
+        host)
+              RHOST="$SET_VALUE."
+              ;;
+        port)
+              RPORT=$SET_VALUE
+              ;;
+        domain)
+              RDOMAIN=$SET_VALUE
+              ;;
+        path)
+              RPATH=$SET_VALUE
+              ;;
+        suffix)
+              RSUFFIX=$SET_VALUE
+              DISP_SUFFIX="..$SET_VALUE"
+              ;;
+        default)
+              set_default_endpoint
+              ONE_LINE_CMD="Yes"
+              ;;
+        *)
+              echo "Try '$FILE_NAME set {scheme|host|domain|port|path|suffix} VALUE'"
+              exit 1
+    esac
+}
+
+set_header() {
+    case "$SET_PARAM" in
+        "default"|"clear"|"reset")
+              unset HEADER_ARRAY
+              ONE_LINE_CMD="Yes"
+              ;;
+        list)
+              echo ${HEADER_ARRAY[*]}
+              quick_exit
+              ;;
+        ""|help)
+              echo "Try '$FILE_NAME header {list|help|default} HEADER VALUE'"
+              quick_exit
+              ;;
+        delete|remove|-r) # can't use -d because it's already for debug.
+              # A blank header value is treated the same as a delete
+              SET_PARAM=$SET_VALUE
+              SET_VALUE=
+              build_header_string
+              ;;
+        *)
+              build_header_string
+              ;;
+    esac
+}
+build_header_string() {
+    HEADER_STRING=
+    r_echo "Setting header ::$SET_PARAM:: with value ::$SET_VALUE::"
+    ACTION=
+    for (( j = 0 ; j < ${#HEADER_ARRAY[@]} ; j++ ))
+      do
+        H_NAME=""
+        H_VALUE=""
+        THIS_HEADER=${HEADER_ARRAY[$j]}   # format is HEADER:VALUE
+        H_NAME=${THIS_HEADER%:*}
+        H_VALUE=${THIS_HEADER##$H_NAME:}
+        r_echo "..$j ::$H_NAME:: ::$H_VALUE:: <::$SET_PARAM::>";
+        if [[ "$H_NAME" == "$SET_PARAM" ]]; then
+          if [[ "$SET_VALUE" == "" ]]; then
+              r_echo "....deleting this header"
+              HEADER_ARRAY[$j]=""
+              ACTION="Yes"
+          else
+              r_echo "....replacing this header"
+              HEADER_ARRAY[$j]="$SET_PARAM:$SET_VALUE"
+              ACTION="Yes"
+          fi
+        fi
+        HEADER_STRING="$HEADER_STRING -H $H_NAME:$H_VALUE"
+    done
+    if [ ! $ACTION ] && [ $SET_PARAM ]; then
+        r_echo "....adding new header"
+        HEADER_ARRAY[${#HEADER_ARRAY[@]}]="$SET_PARAM:$SET_VALUE"
+        HEADER_STRING="$HEADER_STRING -H $SET_PARAM:$SET_VALUE"
+    fi
+}
+build_endpoint() {
+    ENDPOINT="$RSCHEME://$RHOST$RDOMAIN:$RPORT$RPATH$SUFFIX"
+}
+set_default_endpoint() {
+    RSCHEME="http"
+    RHOST=""
+    RDOMAIN="localhost"
+    RPORT="9292"
+    RPATH="/api"
+    RSUFFIX=""
+    DISP_SUFFIX=""
+}
+
+# TODO: Integrate - orphan code right now
+# Input is $THIS_VALUE. Output is $SET_VALUE
+content_type() {
+    case "$SET_VALUE" in
+        JSON|json)
+            SET_VALUE="text/json"
+            ;;
+        XML|xml)
+            SET_VALUE="text/xml"
+            ;;
+        HTML|html)
+            SET_VALUE="text/html"
+            ;;
+        BINARY|binary)
+            SET_VALUE='application/octet-stream'
+            ;;
+        *)
+            r_echo "Unknown Content-Type: $THIS_VALUE"
+    esac
+}
+detect_filename() {
+  echo "biff"
+}
+
+# Save if there have been changes
+clean_exit() {
+    build_endpoint
+    # I need to include headers otherwise this check fails
+    if [ "$ENDPOINT" == "disabled-$RK_IN" ]; then
+        r_echo "No changes to save."
+    else
+        # echo "write a file out to $RK_TMP with $ENDPOINT"
+        `echo "RSCHEME=\"$RSCHEME\""               > $RK_TMP`
+        `echo "RHOST=\"$RHOST\""                  >> $RK_TMP`
+        `echo "RDOMAIN=\"$RDOMAIN\""              >> $RK_TMP`
+        `echo "RPORT=\"$RPORT\""                  >> $RK_TMP`
+        `echo "RPATH=\"$RPATH\""                  >> $RK_TMP`
+        `echo "RSUFFIX=\"$RSUFFIX\""              >> $RK_TMP`
+        `echo "DISP_SUFFIX=\"$DISP_SUFFIX\""      >> $RK_TMP`
+        `echo "HEADER_ARRAY=(${HEADER_ARRAY[*]})" >> $RK_TMP`
+
+        r_echo "saving..."
+        r_echo "Endpoint: $ENDPOINT"
+        r_echo "Headers: ${HEADER_ARRAY[*]}"
+    fi
+    r_echo "clean_exit."
+    exit 0
+}
+quick_exit() {
+    exit 0
+}
+
+# Echo if the debug flag has been set
+r_echo() {
+    if [ $RDEBUG ]; then
+        echo $1
+    fi
+}
+show_settings() {
+    echo "Endpoint: $ENDPOINT$DISP_SUFFIX"
+    echo " Headers: ${HEADER_ARRAY[*]}"
+}
+
+show_usage() {
+    echo "Usage: $FILE_NAME {set*|header*|show|debug|version|help} METHOD PATH [DATA]"
+    echo "   * '$FILE_NAME set' and '$FILE_NAME header' provide additional help for those areas."
+    echo "   Try '$FILE_NAME --help' for more information."
+}
+help() {
+  echo <<EOF "rk version $VERSION. (c) Copyright 2012 Brian Estes. All Rights Reserved.
+
+Usage: $FILE_NAME [OPTIONs] [COMMANDs] METHOD PATH [DATA]
+
+      Command line client for REST. It is essentially a curl wrapper. It has the
+      ability to set hostname, port, URL, Headers, etc.
+
+
+  OPTIONS
+
+      --binary|-b           Set binary transfer mode. Content-Type header will
+                            automatically be set to 'application/octet-stream'.
+                            Headers will also be supressed.
+      -d|--debug|debug      Print extra logging info. Also turns on curl -v
+      --dry-run|--dry_run   Look but do not touch
+
+  COMMANDS
+
+      show|current          Show the current endpoint & headers
+      set|-s|--set          {scheme|host|domain|port|path|suffix} VALUE
+                            Here is the format with all setting names up-cased
+                            and $ added as a prefix:
+                            \$SCHEME://\$HOST\$DOMIAN:\$PORT\$PATH\$SUFFIX
+      header|headers|-H     {list|delete|help|default} HEADER VALUE
+                            Set header "name" to header "value"
+                            delete "name" deletes that header
+                            default clears all headers
+      default|clear|reset   Clear current endpoint and headers
+      cat                   Show contents of $RK_TMP.
+                            Usually in ~/.rk_tmp
+      --version|-v|version  Print version and exit
+      --help|-h|help        Print help and exit
+
+  METHOD
+
+      GET|POST|PUT|DELETE|  HTTP method to use. Once rk sees a valid method,
+      HEAD|LIST             it will stop processing options and start sending
+                            the HTTP request
+
+  DATA
+
+      '{\"json\":\"like so\"}'  Anything you can put between single-quotes will work
+      @filename             Read a file directly
+      @-                    Pipe in data from STDIN
+"
+EOF
+}
+
+
+
+######################################
+###    Code (main) starts here     ###
+######################################
+
+FILE_NAME=`basename $0`
+RK_TMP="$HOME/.RK_TMP"
+VERSION='v0.2'
+RDEBUG=""
+
+# Special check for debug option, otherwise it doesn't start until the command
+# line options have been parsed.
+if [ "$1" == "-d" ]; then
+  RDEBUG=1
+  echo "Debug Mode ON"
+fi
+
+if [ -e "$RK_TMP" ]; then
+    r_echo "Sourcing config file ($RK_TMP)"
+    source $RK_TMP
+    r_echo "Settings loaded: $RSCHEME $RHOST $RDOMIAN $RPORT $RPATH $RSUFFIX $DISP_SUFFIX"
+    r_echo "Headers loaded: $HEADER_ARRAY"
+else
+    r_echo "Config file ($RK_TMP) not found. Using defaults."
+    set_default_endpoint
+    clear_headers
+fi
+
+build_endpoint
+
+# Parse parameters
+r_echo "Arguments($#): $*"
+AT_LEAST_ONE_PARAM="No"
+ARG_ARRAY=($*)
+for (( i = 0 ; i < $# ; i++ ))
+  do
+    AT_LEAST_ONE_PARAM="Yes"
+    THIS_ARG=${ARG_ARRAY[$i]}
+    r_echo "Processing argument($i/${#ARG_ARRAY[@]}): $THIS_ARG"
+    case "$THIS_ARG" in
+        GET|POST|PUT|DELETE|HEAD|OPTIONS)
+              rest
+              clean_exit
+              ;;
+              # HEAD doesn't work as you might expect in curl
+              # Instead of -X HEAD in curl, you omit the method and use only -I
+              # http://sourceforge.net/tracker/?func=detail&atid=100976&aid=1810273&group_id=976
+        get|post|put|delete|head|options)
+              THIS_ARG=`echo $THIS_ARG | tr "[:lower:]" "[:upper:]"`
+              rest
+              clean_exit
+              ;;
+        help|-h|--help)
+              help
+              ;;
+        version|-V|--version)
+              echo "rk $VERSION. Using curl..."
+              curl --version
+              quick_exit
+              ;;
+        -v|-vv|-vvv|--verbose)
+              if [ ! $RDEBUG ]; then
+                echo "Verbose Mode ON"
+              else
+                r_echo "Verbose Mode already ON"
+              fi
+              RDEBUG=1
+              unset ARG_ARRAY[$i]
+              ;;
+        -b|--binary)
+              BINARY=1
+              r_echo "Binary Mode ON"
+              unset ARG_ARRAY[$i]
+              ;;
+        --no-headers)
+              R_SUPRESS_HEADERS=1
+              r_echo "Supressing Headers"
+              unset ARG_ARRAY[$i]
+              ;;
+        show|current)
+              show_settings
+              quick_exit
+              ;;
+        set|-s|--set)
+              SET_PARAM=${ARG_ARRAY[$i+1]}
+              SET_VALUE=${ARG_ARRAY[$i+2]}
+              r_echo "set: $SET_PARAM to $SET_VALUE"
+              set_value
+              if [ "$ONE_LINE_CMD" == "Yes" ]; then
+                  i=$i+1
+                  ONE_LINE_CMD=""
+              else
+                  i=$i+2
+              fi
+              ;;
+        header|headers|--header|-H)
+              SET_PARAM=${ARG_ARRAY[$i+1]}
+              SET_VALUE=${ARG_ARRAY[$i+2]}
+              set_header
+              if [ "$ONE_LINE_CMD" == "Yes" ]; then
+                  i=$i+1
+                  ONE_LINE_CMD=""
+              else
+                  i=$i+2
+              fi
+              ;;
+        --dry-run|--dry_run)
+              DRY_RUN="Yes"
+              echo "Dry-Run Mode ON"
+              unset ARG_ARRAY[$i]
+              ;;
+        cat)
+              echo `cat -b $RK_TMP`
+              quick_exit
+              ;;
+        "default"|"clear"|"reset")
+              set_default_endpoint
+              build_endpoint
+              unset HEADER_ARRAY
+              build_header_string
+              show_settings
+              clean_exit
+              ;;
+        *)
+              echo "Error - invalid command"
+              show_usage
+              exit 1
+    esac
+done
+
+if [ "$AT_LEAST_ONE_PARAM" == "Yes" ]; then
+    clean_exit
+else
+    show_usage
+    exit 1
+fi
+
+echo "Past the parameter check. Should never reach this line."
+exit 1
